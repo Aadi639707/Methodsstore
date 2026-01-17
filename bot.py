@@ -132,8 +132,7 @@ async def broadcast(message: types.Message):
     await message.reply("Broadcast Done!")
 
 if __name__ == '__main__':
-    # Start the dummy server
     keep_alive()
-    # Start the bot
+    # Yahan skip_updates=True hona chahiye
     executor.start_polling(dp, skip_updates=True)
-    
+
