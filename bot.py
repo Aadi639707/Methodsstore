@@ -7,9 +7,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId  # Ye zaroori hai database se method uthane ke liye
+from bson import ObjectId
 
-# --- KEEP ALIVE SERVER ---
+# --- KEEP ALIVE ---
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is Alive!"
@@ -22,7 +22,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7757213781"))
 CHANNELS = [c.strip() for c in os.getenv("CHANNELS", "").split(",") if c.strip()]
-BOT_USERNAME = "FreeMethodAll_Bot" #
+BOT_USERNAME = "FreeMethodAll_Bot"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -43,7 +43,7 @@ async def is_user_joined(user_id):
         except: return False
     return True
 
-# --- COMMANDS ---
+# --- START & REFERRAL ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
@@ -54,7 +54,7 @@ async def start_handler(message: types.Message):
         referrer = int(args[1]) if len(args) > 1 and args[1].isdigit() and int(args[1]) != user_id else None
         await users_col.insert_one({"user_id": user_id, "points": 0, "referred_by": referrer, "name": message.from_user.full_name})
         if referrer:
-            await users_col.update_one({"user_id": referrer}, {"$inc": {"points": 10}}) # 1 Refer = 10 Points
+            await users_col.update_one({"user_id": referrer}, {"$inc": {"points": 10}}) #
             try: await bot.send_message(referrer, "🎁 Someone joined! You got 10 points.")
             except: pass
 
@@ -62,9 +62,9 @@ async def start_handler(message: types.Message):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all_methods"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer_info"))
-        await message.answer(f"✅ Welcome {message.from_user.first_name}!\n\nNeed 50 points (5 Referrals) to unlock methods.", reply_markup=builder.as_markup())
+        await message.answer(f"✅ Welcome {message.from_user.first_name}!\n\nUnlock methods with 50 points (5 Referrals).", reply_markup=builder.as_markup())
     else:
-        builder = InlineKeyboardBuilder()
+        builder = InlineKeyboardBuilder() #
         builder.row(types.InlineKeyboardButton(text="Join Channel 1", url="https://t.me/sanatani_methods"))
         builder.row(types.InlineKeyboardButton(text="Join Channel 2", url="https://t.me/did9ydyddofydo"))
         builder.row(types.InlineKeyboardButton(text="✅ Check Join", callback_data="check_join"))
@@ -76,7 +76,7 @@ async def refer_callback(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     points = user.get("points", 0) if user else 0
     ref_link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
-    await callback.message.edit_text(f"💰 Points: `{points}`\n🔗 Link: `{ref_link}`\n\nInvite 5 friends to unlock!")
+    await callback.message.edit_text(f"💰 Points: `{points}`\n🔗 Link: `{ref_link}`\n\nNeed 50 points (5 Referrals) to unlock!")
 
 # --- VIEW METHODS LOGIC ---
 @dp.callback_query(F.data == "view_all_methods")
@@ -89,7 +89,7 @@ async def list_methods(callback: types.CallbackQuery):
         count += 1
     
     if count == 0:
-        await callback.answer("No methods found!", show_alert=True)
+        await callback.answer("No methods yet!", show_alert=True)
     else:
         await callback.message.edit_text("📚 Select a method to unlock:", reply_markup=builder.as_markup())
 
@@ -98,19 +98,18 @@ async def unlock_method(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     points = user.get("points", 0) if user else 0
     
-    if points < 50: # 5 Referrals Requirement
-        await callback.answer(f"❌ Low Points! You have {points}/50. Need {50-points} more.", show_alert=True)
+    if points < 50: #
+        await callback.answer(f"❌ Low Points! {points}/50 required.", show_alert=True)
         return
 
     method_id = callback.data.split("_")[1]
     method = await methods_col.find_one({"_id": ObjectId(method_id)})
     
     if method:
-        content = method.get("content", "No Description")
         if method.get("video_id"):
-            await callback.message.answer_video(method["video_id"], caption=f"📖 **{method['title']}**\n\n{content}")
+            await callback.message.answer_video(method["video_id"], caption=f"📖 **{method['title']}**\n\n{method.get('content', '')}")
         else:
-            await callback.message.answer(f"📖 **{method['title']}**\n\n{content}")
+            await callback.message.answer(f"📖 **{method['title']}**\n\n{method.get('content', '')}")
     await callback.answer()
 
 # --- ADMIN: ADD METHOD ---
@@ -135,7 +134,7 @@ async def get_content(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "check_join")
 async def check_j(callback: types.CallbackQuery):
-    if await is_user_joined(callback.from_user.id): await callback.message.edit_text("✅ Joined! Try /start.")
+    if await is_user_joined(callback.from_user.id): await callback.message.edit_text("✅ Joined! Use /start.")
     else: await callback.answer("❌ Join first!", show_alert=True)
 
 async def main():
@@ -144,4 +143,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+    
