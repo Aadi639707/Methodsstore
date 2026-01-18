@@ -18,7 +18,6 @@ def keep_alive():
     t.start()
 
 # --- SETUP ---
-logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7757213781"))
@@ -44,9 +43,13 @@ async def is_user_joined(user_id):
     if not channels: return True
     for ch_id in channels:
         try:
+            # Ye user ka real-time status check karta hai
             member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
-            if member.status in ["left", "kicked"]: return False
-        except: return False
+            if member.status in ["left", "kicked", "restricted"]: 
+                return False
+        except Exception as e:
+            print(f"Error checking {ch_id}: {e}")
+            return False
     return True
 
 # --- ADMIN PANEL ---
@@ -55,58 +58,66 @@ async def add_ch(message: types.Message):
     try:
         ch_id = message.text.split()[1]
         await settings_col.update_one({"type": "channels"}, {"$addToSet": {"list": ch_id}}, upsert=True)
-        await message.answer(f"✅ Channel `{ch_id}` Added!")
+        await message.answer(f"✅ Channel `{ch_id}` Added to Database!")
     except: await message.answer("Usage: `/addchannel -100XXXXXXXX` (Use ID only)")
 
 @dp.message(Command("broadcast"), F.from_user.id == ADMIN_ID)
 async def broadcast(message: types.Message):
     if not message.reply_to_message: return await message.answer("Reply to a message!")
     users = users_col.find({})
+    count = 0
     async for u in users:
-        try: await message.reply_to_message.send_copy(chat_id=u['user_id'])
+        try: 
+            await message.reply_to_message.send_copy(chat_id=u['user_id'])
+            count += 1
         except: pass
-    await message.answer("📢 Broadcast Done!")
+    await message.answer(f"📢 Broadcast Done! Sent to {count} users.")
 
 # --- MAIN LOGIC ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
     user_id = message.from_user.id
     user = await users_col.find_one({"user_id": user_id})
+    
     if not user:
-        ref_id = int(message.text.split()[1]) if len(message.text.split()) > 1 and message.text.split()[1].isdigit() else None
+        args = message.text.split()
+        ref_id = int(args[1]) if len(args) > 1 and args[1].isdigit() and int(args[1]) != user_id else None
         await users_col.insert_one({"user_id": user_id, "points": 0, "referred_by": ref_id})
-        if ref_id and ref_id != user_id:
+        if ref_id:
             await users_col.update_one({"user_id": ref_id}, {"$inc": {"points": 10}})
-            try: await bot.send_message(ref_id, "🎁 +10 Points! Someone joined.")
+            try: await bot.send_message(ref_id, "🎁 Congratulations! Someone joined using your link. You got 10 points.")
             except: pass
 
     if await is_user_joined(user_id):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
-        await message.answer("✅ Welcome! Select an option:", reply_markup=builder.as_markup())
+        await message.answer(f"✅ Welcome {message.from_user.first_name}!\nYou have joined all channels. Select an option:", reply_markup=builder.as_markup())
     else:
         channels = await get_channels()
         builder = InlineKeyboardBuilder()
         for ch in channels:
-            # FIXED LINK LOGIC: Channel ID se Username/Link fetch karna
             try:
                 chat = await bot.get_chat(ch)
-                link = chat.invite_link or f"https://t.me/{chat.username}" if chat.username else "https://t.me/sanatani_methods"
-                builder.row(types.InlineKeyboardButton(text=f"Join {chat.title or 'Channel'}", url=link))
+                link = chat.invite_link or f"https://t.me/{chat.username}" if chat.username else "Join Link Not Found"
+                builder.row(types.InlineKeyboardButton(text=f"Join {chat.title}", url=link))
             except:
-                # Fallback if bot is not admin or can't fetch link
-                builder.row(types.InlineKeyboardButton(text="Join Channel", url="https://t.me/sanatani_methods"))
+                builder.row(types.InlineKeyboardButton(text="Join Private Channel", url="https://t.me/sanatani_methods"))
         
         builder.row(types.InlineKeyboardButton(text="✅ Check Join", callback_data="check"))
-        await message.answer("❌ You must join our channels first!", reply_markup=builder.as_markup())
+        await message.answer("❌ You haven't joined our channels yet! Please join and click the button below.", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data == "check")
 async def check_cb(callback: types.CallbackQuery):
     if await is_user_joined(callback.from_user.id):
-        await callback.message.edit_text("✅ Success! Use /start to see methods.")
+        await callback.message.delete()
+        # Direct Menu Show karein
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
+        builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
+        await callback.message.answer("✅ Verification successful! Choose an option:", reply_markup=builder.as_markup())
     else: 
-        await callback.answer("❌ Aapne abhi tak join nahi kiya!", show_alert=True)
+        await callback.answer("❌ Abhi bhi join nahi kiya! Saare channels join karke check karein.", show_alert=True)
 
 @dp.callback_query(F.data == "view_all")
 async def view_all(callback: types.CallbackQuery):
@@ -114,13 +125,13 @@ async def view_all(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     async for m in cursor:
         builder.row(types.InlineKeyboardButton(text=f"🔓 {m['title']}", callback_data=f"get_{m['_id']}"))
-    await callback.message.edit_text("📚 Select a Method:", reply_markup=builder.as_markup())
+    await callback.message.edit_text("📚 Available Methods (Unlock for 50 Points):", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("get_"))
 async def get_m(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     if user.get("points", 0) < 50 and callback.from_user.id != ADMIN_ID:
-        return await callback.answer(f"❌ 50 Points Required! You have {user['points']}.", show_alert=True)
+        return await callback.answer(f"❌ You need 50 points (5 Refers) to unlock! Current: {user['points']}", show_alert=True)
     
     m = await methods_col.find_one({"_id": ObjectId(callback.data.split("_")[1])})
     if m:
@@ -128,16 +139,15 @@ async def get_m(callback: types.CallbackQuery):
         else: await callback.message.answer(f"📖 **{m['title']}**\n\n{m['content']}")
     await callback.answer()
 
-# --- ADMIN: ADD METHOD ---
 @dp.message(Command("addmethod"), F.from_user.id == ADMIN_ID)
 async def add_m(message: types.Message, state: FSMContext):
-    await message.answer("Step 1: Send Title:")
+    await message.answer("Step 1: Send Button Title:")
     await state.set_state(AddMethod.waiting_for_title)
 
 @dp.message(AddMethod.waiting_for_title)
 async def m_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
-    await message.answer("Step 2: Send Content (Text/Video):")
+    await message.answer("Step 2: Send Content (Text/Video/Photo):")
     await state.set_state(AddMethod.waiting_for_content)
 
 @dp.message(AddMethod.waiting_for_content)
@@ -145,14 +155,14 @@ async def m_cont(message: types.Message, state: FSMContext):
     data = await state.get_data()
     v_id = message.video.file_id if message.video else None
     await methods_col.insert_one({"title": data['title'], "content": message.text or message.caption, "video_id": v_id})
-    await message.answer("🚀 Method Added!")
+    await message.answer("🚀 Method Added to Bot!")
     await state.clear()
 
 @dp.callback_query(F.data == "refer")
 async def refer_cb(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
-    await callback.message.edit_text(f"💰 Points: `{user['points']}`\n🔗 Link: `{link}`")
+    await callback.message.edit_text(f"💰 **Wallet Balance**\n\nPoints: `{user['points']}`\nInvites: `{user['points']//10}`\n\n🔗 **Your Invite Link:**\n`{link}`")
 
 async def main():
     keep_alive()
@@ -160,4 +170,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                                               
+    
