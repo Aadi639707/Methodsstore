@@ -23,11 +23,8 @@ MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7757213781"))
 BOT_USERNAME = "FreeMethodAll_Bot"
 
-# FIXED CHANNELS DATA (Ab 4 Channels hain)
+# UPDATED CHANNELS DATA (Ab sirf 1 channel hai)
 REQUIRED_CHANNELS = [
-    {"id": -1002517438543, "link": "https://t.me/+O4CxrdkvKxwwYjNl", "name": "Main Channel"},
-    {"id": -1003422131009, "link": "https://t.me/sanatani_methods", "name": "Sanatani Methods"},
-    {"id": -1003406880501, "link": "https://t.me/did9ydyddofydo", "name": "Backup Channel"},
     {"id": -1002331607869, "link": "https://t.me/Yonko_Crew", "name": "Yonko Crew"}
 ]
 
@@ -70,13 +67,13 @@ async def start_handler(message: types.Message):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
-        await message.answer(f"✅ Welcome {message.from_user.first_name}!\nSaare channels joined hain. Option select karein:", reply_markup=builder.as_markup())
+        await message.answer(f"✅ Welcome {message.from_user.first_name}!\nOptions select karein:", reply_markup=builder.as_markup())
     else:
         builder = InlineKeyboardBuilder()
         for ch in REQUIRED_CHANNELS:
             builder.row(types.InlineKeyboardButton(text=f"Join {ch['name']}", url=ch["link"]))
         builder.row(types.InlineKeyboardButton(text="✅ Check Join", callback_data="check"))
-        await message.answer("❌ Pehle niche diye gaye saare channels join karein!", reply_markup=builder.as_markup())
+        await message.answer("❌ Niche diya gaya channel join karein tabhi bot chalega:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data == "check")
 async def check_cb(callback: types.CallbackQuery):
@@ -85,14 +82,14 @@ async def check_cb(callback: types.CallbackQuery):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
-        await callback.message.answer("✅ Verification successful! Ab aap methods dekh sakte hain.", reply_markup=builder.as_markup())
+        await callback.message.answer("✅ Verification successful!", reply_markup=builder.as_markup())
     else: 
-        await callback.answer("❌ Abhi bhi saare channels join nahi kiye!", show_alert=True)
+        await callback.answer("❌ Aapne abhi tak channel join nahi kiya!", show_alert=True)
 
 # --- BROADCAST & ADMIN ---
 @dp.message(Command("broadcast"), F.from_user.id == ADMIN_ID)
 async def broadcast(message: types.Message):
-    if not message.reply_to_message: return await message.answer("Kisi message par reply karke /broadcast likhein.")
+    if not message.reply_to_message: return await message.answer("Message par reply karein.")
     users = users_col.find({})
     count = 0
     async for u in users:
@@ -100,17 +97,17 @@ async def broadcast(message: types.Message):
             await message.reply_to_message.send_copy(chat_id=u['user_id'])
             count += 1
         except: pass
-    await message.answer(f"📢 Broadcast sent to {count} users.")
+    await message.answer(f"📢 Broadcast done! {count} users ko bhej diya gaya.")
 
 @dp.message(Command("addmethod"), F.from_user.id == ADMIN_ID)
 async def add_m(message: types.Message, state: FSMContext):
-    await message.answer("Step 1: Button ka Title bhejein:")
+    await message.answer("Step 1: Button Title bhejein:")
     await state.set_state(AddMethod.waiting_for_title)
 
 @dp.message(AddMethod.waiting_for_title)
 async def m_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
-    await message.answer("Step 2: Method ka Content (Video/Photo/Text) bhejein:")
+    await message.answer("Step 2: Method Content (Video/Photo/Text) bhejein:")
     await state.set_state(AddMethod.waiting_for_content)
 
 @dp.message(AddMethod.waiting_for_content)
@@ -119,7 +116,7 @@ async def m_cont(message: types.Message, state: FSMContext):
     v_id = message.video.file_id if message.video else None
     p_id = message.photo[-1].file_id if message.photo else None
     await methods_col.insert_one({"title": data['title'], "content": message.text or message.caption, "video_id": v_id, "photo_id": p_id})
-    await message.answer("🚀 Method successfully add ho gaya!")
+    await message.answer("🚀 Method add ho gaya!")
     await state.clear()
 
 @dp.callback_query(F.data == "view_all")
@@ -128,13 +125,13 @@ async def view_all(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     async for m in cursor:
         builder.row(types.InlineKeyboardButton(text=f"🔓 {m['title']}", callback_data=f"get_{m['_id']}"))
-    await callback.message.edit_text("📚 Available Methods (50 Points needed):", reply_markup=builder.as_markup())
+    await callback.message.edit_text("📚 Methods List:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("get_"))
 async def get_m(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     if user.get("points", 0) < 50 and callback.from_user.id != ADMIN_ID:
-        return await callback.answer(f"❌ Unlock karne ke liye 50 points (5 Refers) chahiye!", show_alert=True)
+        return await callback.answer(f"❌ Unlock ke liye 50 points chahiye!", show_alert=True)
     
     m = await methods_col.find_one({"_id": ObjectId(callback.data.split("_")[1])})
     if m:
