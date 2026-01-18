@@ -18,6 +18,7 @@ def keep_alive():
     t.start()
 
 # --- SETUP ---
+logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7757213781"))
@@ -36,59 +37,54 @@ class AddMethod(StatesGroup):
 # --- DYNAMIC HELPERS ---
 async def get_channels():
     data = await settings_col.find_one({"type": "channels"})
-    return data["list"] if data else []
+    return data["list"] if data and "list" in data else []
 
 async def is_user_joined(user_id):
     channels = await get_channels()
+    if not channels: return True # Agar koi channel nahi toh allow karein
     for channel_id in channels:
         try:
             member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
             if member.status in ["left", "kicked"]: return False
-        except: return False
+        except Exception as e:
+            logging.error(f"Join Check Error: {e}")
+            return False
     return True
 
-# --- ADMIN COMMANDS (CONTROL PANEL) ---
+# --- ADMIN COMMANDS ---
 
 @dp.message(Command("addchannel"), F.from_user.id == ADMIN_ID)
 async def add_channel_cmd(message: types.Message):
     try:
         channel_id = message.text.split()[1]
+        if not channel_id.startswith("-100"):
+            return await message.answer("❌ Invalid ID! Channel ID must start with -100")
         await settings_col.update_one({"type": "channels"}, {"$addToSet": {"list": channel_id}}, upsert=True)
-        await message.answer(f"✅ Channel `{channel_id}` added to Join Check!")
+        await message.answer(f"✅ Channel `{channel_id}` added successfully!")
     except:
         await message.answer("❌ Usage: `/addchannel -100XXXXXXXX`")
-
-@dp.message(Command("removechannel"), F.from_user.id == ADMIN_ID)
-async def remove_channel_cmd(message: types.Message):
-    try:
-        channel_id = message.text.split()[1]
-        await settings_col.update_one({"type": "channels"}, {"$pull": {"list": channel_id}})
-        await message.answer(f"🗑 Channel `{channel_id}` removed!")
-    except:
-        await message.answer("❌ Usage: `/removechannel -100XXXXXXXX`")
 
 @dp.message(Command("broadcast"), F.from_user.id == ADMIN_ID)
 async def broadcast_handler(message: types.Message):
     if not message.reply_to_message:
-        return await message.answer("❌ Kisi bhi message par reply karke `/broadcast` likhein.")
-    
+        return await message.answer("❌ Reply to a message with /broadcast")
     users = users_col.find({})
-    sent, total = 0, 0
+    sent = 0
     async for user in users:
-        total += 1
         try:
             await message.reply_to_message.send_copy(chat_id=user['user_id'])
             sent += 1
         except: pass
-    await message.answer(f"📢 Broadcast Done!\n✅ Sent: {sent}/{total}")
+    await message.answer(f"📢 Broadcast sent to {sent} users.")
 
-# --- USER COMMANDS ---
+# --- MAIN LOGIC ---
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
     args = message.text.split()
     
+    # Save User & Referral
     user = await users_col.find_one({"user_id": user_id})
     if not user:
         referrer = int(args[1]) if len(args) > 1 and args[1].isdigit() and int(args[1]) != user_id else None
@@ -106,12 +102,23 @@ async def start_handler(message: types.Message):
     else:
         channels = await get_channels()
         builder = InlineKeyboardBuilder()
-        for i, ch in enumerate(channels, 1):
-            builder.row(types.InlineKeyboardButton(text=f"Join Channel {i}", url=f"https://t.me/{ch.replace('-100', '')}"))
+        for ch in channels:
+            # Create a direct link (removing -100 for public links or keep it simple)
+            builder.row(types.InlineKeyboardButton(text="Join Channel", url=f"https://t.me/{(str(ch)).replace('-100', '')}"))
         builder.row(types.InlineKeyboardButton(text="✅ Check Join", callback_data="check_join"))
-        await message.answer("❌ Join channels first!", reply_markup=builder.as_markup())
+        await message.answer("❌ You must join our channels first!", reply_markup=builder.as_markup())
 
-# --- METHOD LOGIC ---
+@dp.callback_query(F.data == "check_join")
+async def check_join_callback(callback: types.CallbackQuery):
+    if await is_user_joined(callback.from_user.id):
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
+        builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer_info"))
+        await callback.message.edit_text("✅ Verification successful! Choose an option:", reply_markup=builder.as_markup())
+    else:
+        await callback.answer("❌ You haven't joined all channels yet!", show_alert=True)
+
+# --- METHOD MANAGEMENT ---
 
 @dp.message(Command("addmethod"), F.from_user.id == ADMIN_ID)
 async def start_add(message: types.Message, state: FSMContext):
@@ -139,26 +146,27 @@ async def list_methods(callback: types.CallbackQuery):
     cursor = methods_col.find({})
     builder = InlineKeyboardBuilder()
     async for m in cursor:
-        builder.row(types.InlineKeyboardButton(text=m['title'], callback_data=f"get_{m['_id']}"))
-    await callback.message.edit_text("📚 Methods List:", reply_markup=builder.as_markup())
+        builder.row(types.InlineKeyboardButton(text=f"🔓 {m['title']}", callback_data=f"get_{m['_id']}"))
+    await callback.message.edit_text("📚 Available Methods:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("get_"))
 async def unlock(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     if (user.get("points", 0) < 50) and (callback.from_user.id != ADMIN_ID):
-        return await callback.answer("❌ 5 Referrals (50 points) required!", show_alert=True)
+        return await callback.answer(f"❌ 5 Refers required! Current Points: {user['points']}", show_alert=True)
     
     m = await methods_col.find_one({"_id": ObjectId(callback.data.split("_")[1])})
-    if m.get("video_id"): await callback.message.answer_video(m["video_id"], caption=m["content"])
-    elif m.get("photo_id"): await callback.message.answer_photo(m["photo_id"], caption=m["content"])
-    else: await callback.message.answer(m["content"])
+    if m:
+        if m.get("video_id"): await callback.message.answer_video(m["video_id"], caption=m["content"])
+        elif m.get("photo_id"): await callback.message.answer_photo(m["photo_id"], caption=m["content"])
+        else: await callback.message.answer(m["content"])
     await callback.answer()
 
 @dp.callback_query(F.data == "refer_info")
 async def refer_info(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
-    await callback.message.edit_text(f"💰 Points: {user['points']}\n🔗 Link: {link}")
+    await callback.message.edit_text(f"💰 **Your Stats**\n\nPoints: `{user['points']}`\nInvites: `{user['points']//10}`\n\n🔗 **Your Link:**\n`{link}`")
 
 async def main():
     keep_alive()
@@ -166,3 +174,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+        
