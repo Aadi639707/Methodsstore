@@ -1,5 +1,6 @@
 import os, asyncio, logging
 from flask import Flask
+from threading import Thread
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -7,8 +8,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
-from hypercorn.asyncio import serve
-from hypercorn.config import Config
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +26,6 @@ REQUIRED_CHANNELS = [
     {"id": -1003337157467, "link": "https://t.me/+dazyWXu95IxlMzg9", "name": "New GC"}
 ]
 
-# --- BOT & DB SETUP ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 client = AsyncIOMotorClient(MONGO_URL)
@@ -38,7 +36,6 @@ class AddMethod(StatesGroup):
     waiting_for_title = State()
     waiting_for_content = State()
 
-# --- HELPERS ---
 async def is_user_joined(user_id):
     for ch in REQUIRED_CHANNELS:
         try:
@@ -47,7 +44,6 @@ async def is_user_joined(user_id):
         except: return False
     return True
 
-# --- HANDLERS (Same as before, simplified) ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
@@ -109,55 +105,21 @@ async def get_m(callback: types.CallbackQuery):
         else: await callback.message.answer(m["content"])
     await callback.answer()
 
-# --- ADMIN ---
-@dp.message(Command("broadcast"), F.from_user.id == ADMIN_ID)
-async def broadcast(message: types.Message):
-    if not message.reply_to_message: return await message.answer("Reply to a message.")
-    users = users_col.find({})
-    count = 0
-    async for u in users:
-        try:
-            await message.reply_to_message.send_copy(chat_id=u['user_id'])
-            count += 1
-        except: pass
-    await message.answer(f"📢 Broadcast sent to {count} users.")
-
-@dp.message(Command("addmethod"), F.from_user.id == ADMIN_ID)
-async def add_m(message: types.Message, state: FSMContext):
-    await message.answer("Send title:")
-    await state.set_state(AddMethod.waiting_for_title)
-
-@dp.message(AddMethod.waiting_for_title)
-async def m_title(message: types.Message, state: FSMContext):
-    await state.update_data(title=message.text)
-    await message.answer("Send content:")
-    await state.set_state(AddMethod.waiting_for_content)
-
-@dp.message(AddMethod.waiting_for_content)
-async def m_cont(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    v_id = message.video.file_id if message.video else None
-    p_id = message.photo[-1].file_id if message.photo else None
-    await methods_col.insert_one({"title": data['title'], "content": message.text or message.caption, "video_id": v_id, "photo_id": p_id})
-    await message.answer("🚀 Method added!")
-    await state.clear()
-
-# --- ASYNC RUNNER ---
+# --- FLASK ---
 app = Flask(__name__)
 @app.route('/')
-async def index(): return "Bot is Online"
+def index(): return "Bot is Alive"
 
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+# --- MAIN ---
 async def main():
-    config = Config()
-    config.bind = [f"0.0.0.0:{os.environ.get('PORT', 10000)}"]
-    
-    logger.info("Starting Bot and Server...")
-    # Isse dono saath mein chalenge bina thread error ke
-    await asyncio.gather(
-        serve(app, config),
-        dp.start_polling(bot)
-    )
+    # Start Flask in background
+    Thread(target=run_flask, daemon=True).start()
+    logger.info("Bot Polling Started...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+        
