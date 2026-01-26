@@ -29,11 +29,12 @@ MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = 8401733642
 BOT_USERNAME = "FreeMethodAll_Bot"
 
-# --- CHANNELS DATA ---
+# --- UPDATED CHANNELS DATA (Total 4) ---
 REQUIRED_CHANNELS = [
     {"id": -1002454723830, "link": "https://t.me/SENPAI_GC", "name": "Senpai GC"},
     {"id": -1003801897984, "link": "https://t.me/sanatanigojo", "name": "Sanatani Gojo"},
-    {"id": -1002331607869, "link": "https://t.me/Yonko_Crew", "name": "Yonko Crew"}
+    {"id": -1002331607869, "link": "https://t.me/Yonko_Crew", "name": "Yonko Crew"},
+    {"id": -1003337157467, "link": "https://t.me/+dazyWXu95IxlMzg9", "name": "New GC"}
 ]
 
 bot = Bot(token=BOT_TOKEN)
@@ -79,7 +80,7 @@ async def start_handler(message: types.Message):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
-        await message.answer(f"✅ **Hello {message.from_user.first_name}!**\nWelcome to the bot. Please choose an option below:", reply_markup=builder.as_markup())
+        await message.answer(f"✅ **Hello {message.from_user.first_name}!**\nWelcome! Please select an option:", reply_markup=builder.as_markup())
     else:
         builder = InlineKeyboardBuilder()
         for ch in REQUIRED_CHANNELS:
@@ -94,7 +95,7 @@ async def check_cb(callback: types.CallbackQuery):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
-        await callback.message.answer("✅ **Verification Successful!**\nYou can now use the bot.", reply_markup=builder.as_markup())
+        await callback.message.answer("✅ **Verification Successful!**", reply_markup=builder.as_markup())
     else: 
         await callback.answer("❌ You haven't joined all channels yet!", show_alert=True)
 
@@ -102,7 +103,7 @@ async def check_cb(callback: types.CallbackQuery):
 @dp.message(Command("broadcast"), F.from_user.id == ADMIN_ID)
 async def broadcast(message: types.Message):
     if not message.reply_to_message: 
-        return await message.answer("Please reply to a message to broadcast it.")
+        return await message.answer("Please reply to a message to broadcast.")
     
     users = users_col.find({})
     count = 0
@@ -112,17 +113,17 @@ async def broadcast(message: types.Message):
             count += 1
         except: 
             pass
-    await message.answer(f"📢 **Broadcast Completed!** Sent to {count} users.")
+    await message.answer(f"📢 **Broadcast Sent!** Total users: {count}")
 
 @dp.message(Command("addmethod"), F.from_user.id == ADMIN_ID)
 async def add_m(message: types.Message, state: FSMContext):
-    await message.answer("🛠 **Step 1:** Send the title for the button:")
+    await message.answer("🛠 **Step 1:** Send the button title:")
     await state.set_state(AddMethod.waiting_for_title)
 
 @dp.message(AddMethod.waiting_for_title)
 async def m_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
-    await message.answer("🛠 **Step 2:** Send the content (Text, Photo, or Video) for the method:")
+    await message.answer("🛠 **Step 2:** Send the content (Text/Image/Video):")
     await state.set_state(AddMethod.waiting_for_content)
 
 @dp.message(AddMethod.waiting_for_content)
@@ -130,15 +131,14 @@ async def m_cont(message: types.Message, state: FSMContext):
     data = await state.get_data()
     v_id = message.video.file_id if message.video else None
     p_id = message.photo[-1].file_id if message.photo else None
-    content = message.text or message.caption
     
     await methods_col.insert_one({
         "title": data['title'], 
-        "content": content, 
+        "content": message.text or message.caption, 
         "video_id": v_id, 
         "photo_id": p_id
     })
-    await message.answer("🚀 **Success!** Method has been added to the database.")
+    await message.answer("🚀 **Method Added Successfully!**")
     await state.clear()
 
 # --- USER FEATURES ---
@@ -148,36 +148,26 @@ async def view_all(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     async for m in cursor:
         builder.row(types.InlineKeyboardButton(text=f"🔓 {m['title']}", callback_data=f"get_{m['_id']}"))
-    
     await callback.message.edit_text("📚 **Available Methods:**", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("get_"))
 async def get_m(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
-    points = user.get("points", 0)
-    
-    if points < 50 and callback.from_user.id != ADMIN_ID:
-        return await callback.answer(f"❌ You need 50 points to unlock this! Your points: {points}", show_alert=True)
+    if user.get("points", 0) < 50 and callback.from_user.id != ADMIN_ID:
+        return await callback.answer(f"❌ You need 50 points! Current: {user.get('points', 0)}", show_alert=True)
     
     m = await methods_col.find_one({"_id": ObjectId(callback.data.split("_")[1])})
     if m:
-        if m.get("video_id"): 
-            await callback.message.answer_video(m["video_id"], caption=m["content"])
-        elif m.get("photo_id"): 
-            await callback.message.answer_photo(m["photo_id"], caption=m["content"])
-        else: 
-            await callback.message.answer(m["content"])
+        if m.get("video_id"): await callback.message.answer_video(m["video_id"], caption=m["content"])
+        elif m.get("photo_id"): await callback.message.answer_photo(m["photo_id"], caption=m["content"])
+        else: await callback.message.answer(m["content"])
     await callback.answer()
 
 @dp.callback_query(F.data == "refer")
 async def refer_cb(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
-    await callback.message.edit_text(
-        f"💰 **My Points:** `{user['points']}`\n\n"
-        f"🔗 **Referral Link:**\n`{link}`\n\n"
-        f"Share this link! You get 10 points for every friend who joins."
-    )
+    await callback.message.edit_text(f"💰 **Your Points:** `{user['points']}`\n\n🔗 **Your Referral Link:**\n`{link}`")
 
 async def main():
     keep_alive()
@@ -186,4 +176,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
