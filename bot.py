@@ -9,6 +9,10 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
+# --- LOGGING SETUP ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 # --- KEEP ALIVE SETUP ---
 app = Flask('')
 
@@ -17,10 +21,13 @@ def home():
     return "Bot is Running!"
 
 def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Starting Flask on port {port}")
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run)
+    t.daemon = True
     t.start()
 
 # --- CONFIGURATION ---
@@ -29,7 +36,7 @@ MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = 8401733642
 BOT_USERNAME = "FreeMethodAll_Bot"
 
-# --- UPDATED CHANNELS DATA (Total 4) ---
+# --- CHANNELS DATA ---
 REQUIRED_CHANNELS = [
     {"id": -1002454723830, "link": "https://t.me/SENPAI_GC", "name": "Senpai GC"},
     {"id": -1003801897984, "link": "https://t.me/sanatanigojo", "name": "Sanatani Gojo"},
@@ -37,11 +44,20 @@ REQUIRED_CHANNELS = [
     {"id": -1003337157467, "link": "https://t.me/+dazyWXu95IxlMzg9", "name": "New GC"}
 ]
 
+# Initialize Bot and Dispatcher
+if not BOT_TOKEN:
+    logger.error("No BOT_TOKEN found in environment variables!")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-client = AsyncIOMotorClient(MONGO_URL)
-db = client.get_database("ClonecartBot")
-users_col, methods_col = db.users, db.methods
+
+# MongoDB Connection
+try:
+    client = AsyncIOMotorClient(MONGO_URL)
+    db = client.get_database("ClonecartBot")
+    users_col, methods_col = db.users, db.methods
+    logger.info("MongoDB Connection initialized")
+except Exception as e:
+    logger.error(f"MongoDB Connection Error: {e}")
 
 class AddMethod(StatesGroup):
     waiting_for_title = State()
@@ -55,7 +71,7 @@ async def is_user_joined(user_id):
             if member.status in ["left", "kicked"]: 
                 return False
         except Exception as e:
-            logging.error(f"Error checking channel {ch['id']}: {e}")
+            logger.error(f"Force Join Check Error for {ch['id']}: {e}")
             return False
     return True
 
@@ -65,28 +81,30 @@ async def start_handler(message: types.Message):
     user_id = message.from_user.id
     args = message.text.split()
     
-    user = await users_col.find_one({"user_id": user_id})
-    if not user:
-        referrer = int(args[1]) if len(args) > 1 and args[1].isdigit() and int(args[1]) != user_id else None
-        await users_col.insert_one({"user_id": user_id, "points": 0, "referred_by": referrer})
-        if referrer:
-            await users_col.update_one({"user_id": referrer}, {"$inc": {"points": 10}})
-            try: 
-                await bot.send_message(referrer, "🎁 **+10 Points!** Someone joined using your referral link.")
-            except: 
-                pass
+    try:
+        user = await users_col.find_one({"user_id": user_id})
+        if not user:
+            referrer = int(args[1]) if len(args) > 1 and args[1].isdigit() and int(args[1]) != user_id else None
+            await users_col.insert_one({"user_id": user_id, "points": 0, "referred_by": referrer})
+            if referrer:
+                await users_col.update_one({"user_id": referrer}, {"$inc": {"points": 10}})
+                try: 
+                    await bot.send_message(referrer, "🎁 **+10 Points!** Someone joined using your link.")
+                except: pass
+    except Exception as e:
+        logger.error(f"Database Error in start: {e}")
 
     if await is_user_joined(user_id):
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
-        await message.answer(f"✅ **Hello {message.from_user.first_name}!**\nWelcome! Please select an option:", reply_markup=builder.as_markup())
+        await message.answer(f"✅ **Hello {message.from_user.first_name}!**\nWelcome! Select an option:", reply_markup=builder.as_markup())
     else:
         builder = InlineKeyboardBuilder()
         for ch in REQUIRED_CHANNELS:
             builder.row(types.InlineKeyboardButton(text=f"Join {ch['name']}", url=ch["link"]))
         builder.row(types.InlineKeyboardButton(text="✅ Check Membership", callback_data="check"))
-        await message.answer("❌ **Access Denied!**\nYou must join all the channels below to use this bot:", reply_markup=builder.as_markup())
+        await message.answer("❌ **Access Denied!**\nJoin all channels to unlock the bot:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data == "check")
 async def check_cb(callback: types.CallbackQuery):
@@ -103,7 +121,7 @@ async def check_cb(callback: types.CallbackQuery):
 @dp.message(Command("broadcast"), F.from_user.id == ADMIN_ID)
 async def broadcast(message: types.Message):
     if not message.reply_to_message: 
-        return await message.answer("Please reply to a message to broadcast.")
+        return await message.answer("Reply to a message to broadcast.")
     
     users = users_col.find({})
     count = 0
@@ -111,9 +129,8 @@ async def broadcast(message: types.Message):
         try:
             await message.reply_to_message.send_copy(chat_id=u['user_id'])
             count += 1
-        except: 
-            pass
-    await message.answer(f"📢 **Broadcast Sent!** Total users: {count}")
+        except: pass
+    await message.answer(f"📢 **Broadcast Sent!** Total: {count}")
 
 @dp.message(Command("addmethod"), F.from_user.id == ADMIN_ID)
 async def add_m(message: types.Message, state: FSMContext):
@@ -138,7 +155,7 @@ async def m_cont(message: types.Message, state: FSMContext):
         "video_id": v_id, 
         "photo_id": p_id
     })
-    await message.answer("🚀 **Method Added Successfully!**")
+    await message.answer("🚀 **Method Added!**")
     await state.clear()
 
 # --- USER FEATURES ---
@@ -148,13 +165,13 @@ async def view_all(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     async for m in cursor:
         builder.row(types.InlineKeyboardButton(text=f"🔓 {m['title']}", callback_data=f"get_{m['_id']}"))
-    await callback.message.edit_text("📚 **Available Methods:**", reply_markup=builder.as_markup())
+    await callback.message.edit_text("📚 **Methods List:**", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("get_"))
 async def get_m(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     if user.get("points", 0) < 50 and callback.from_user.id != ADMIN_ID:
-        return await callback.answer(f"❌ You need 50 points! Current: {user.get('points', 0)}", show_alert=True)
+        return await callback.answer(f"❌ You need 50 points!", show_alert=True)
     
     m = await methods_col.find_one({"_id": ObjectId(callback.data.split("_")[1])})
     if m:
@@ -167,12 +184,16 @@ async def get_m(callback: types.CallbackQuery):
 async def refer_cb(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
-    await callback.message.edit_text(f"💰 **Your Points:** `{user['points']}`\n\n🔗 **Your Referral Link:**\n`{link}`")
+    await callback.message.edit_text(f"💰 **Points:** `{user['points']}`\n🔗 **Link:** `{link}`")
 
 async def main():
     keep_alive()
-    logging.basicConfig(level=logging.INFO)
+    logger.info("Bot Polling Started...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot Stopped")
+    
