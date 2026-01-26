@@ -1,6 +1,5 @@
 import os, asyncio, logging
 from flask import Flask
-from threading import Thread
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -8,6 +7,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +47,7 @@ async def is_user_joined(user_id):
         except: return False
     return True
 
-# --- HANDLERS ---
+# --- HANDLERS (Same as before, simplified) ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
@@ -57,7 +58,7 @@ async def start_handler(message: types.Message):
         await users_col.insert_one({"user_id": user_id, "points": 0, "referred_by": ref})
         if ref:
             await users_col.update_one({"user_id": ref}, {"$inc": {"points": 10}})
-            try: await bot.send_message(ref, "🎁 +10 Points! Referral join.")
+            try: await bot.send_message(ref, "🎁 **+10 Points!** Someone joined via your link.")
             except: pass
 
     if await is_user_joined(user_id):
@@ -69,8 +70,8 @@ async def start_handler(message: types.Message):
         builder = InlineKeyboardBuilder()
         for ch in REQUIRED_CHANNELS:
             builder.row(types.InlineKeyboardButton(text=f"Join {ch['name']}", url=ch["link"]))
-        builder.row(types.InlineKeyboardButton(text="✅ Check", callback_data="check"))
-        await message.answer("❌ Join all channels:", reply_markup=builder.as_markup())
+        builder.row(types.InlineKeyboardButton(text="✅ Check Membership", callback_data="check"))
+        await message.answer("❌ Join all channels to use the bot:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data == "check")
 async def check_cb(callback: types.CallbackQuery):
@@ -80,13 +81,13 @@ async def check_cb(callback: types.CallbackQuery):
         builder.row(types.InlineKeyboardButton(text="📚 View Methods", callback_data="view_all"))
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
         await callback.message.answer("✅ Verified!", reply_markup=builder.as_markup())
-    else: await callback.answer("❌ Join first!", show_alert=True)
+    else: await callback.answer("❌ Join all channels first!", show_alert=True)
 
 @dp.callback_query(F.data == "refer")
 async def refer_cb(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
-    await callback.message.edit_text(f"💰 Points: `{user['points']}`\n🔗 Link: `{link}`")
+    await callback.message.edit_text(f"💰 **Points:** `{user['points']}`\n🔗 **Referral Link:** `{link}`")
 
 @dp.callback_query(F.data == "view_all")
 async def view_all(callback: types.CallbackQuery):
@@ -94,13 +95,13 @@ async def view_all(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     async for m in cursor:
         builder.row(types.InlineKeyboardButton(text=f"🔓 {m['title']}", callback_data=f"get_{m['_id']}"))
-    await callback.message.edit_text("📚 Methods:", reply_markup=builder.as_markup())
+    await callback.message.edit_text("📚 **Available Methods:**", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("get_"))
 async def get_m(callback: types.CallbackQuery):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     if user.get("points", 0) < 50 and callback.from_user.id != ADMIN_ID:
-        return await callback.answer("❌ 50 points needed!", show_alert=True)
+        return await callback.answer("❌ You need 50 points!", show_alert=True)
     m = await methods_col.find_one({"_id": ObjectId(callback.data.split("_")[1])})
     if m:
         if m.get("video_id"): await callback.message.answer_video(m["video_id"], caption=m["content"])
@@ -119,7 +120,7 @@ async def broadcast(message: types.Message):
             await message.reply_to_message.send_copy(chat_id=u['user_id'])
             count += 1
         except: pass
-    await message.answer(f"📢 Done! Sent to {count}.")
+    await message.answer(f"📢 Broadcast sent to {count} users.")
 
 @dp.message(Command("addmethod"), F.from_user.id == ADMIN_ID)
 async def add_m(message: types.Message, state: FSMContext):
@@ -138,24 +139,25 @@ async def m_cont(message: types.Message, state: FSMContext):
     v_id = message.video.file_id if message.video else None
     p_id = message.photo[-1].file_id if message.photo else None
     await methods_col.insert_one({"title": data['title'], "content": message.text or message.caption, "video_id": v_id, "photo_id": p_id})
-    await message.answer("🚀 Added!")
+    await message.answer("🚀 Method added!")
     await state.clear()
 
-# --- RUNNER ---
+# --- ASYNC RUNNER ---
 app = Flask(__name__)
-
 @app.route('/')
-def index(): return "Bot is Alive"
+async def index(): return "Bot is Online"
 
-def run_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    logger.info("Bot Polling Started...")
-    loop.run_until_complete(dp.start_polling(bot))
-
-# Yeh line zaroori hai Render ke liye
-Thread(target=run_bot).start()
+async def main():
+    config = Config()
+    config.bind = [f"0.0.0.0:{os.environ.get('PORT', 10000)}"]
+    
+    logger.info("Starting Bot and Server...")
+    # Isse dono saath mein chalenge bina thread error ke
+    await asyncio.gather(
+        serve(app, config),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-    
+    asyncio.run(main())
+            
