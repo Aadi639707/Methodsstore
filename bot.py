@@ -20,11 +20,13 @@ def keep_alive():
 # --- SETUP ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7757213781"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "8401733642"))
 BOT_USERNAME = "FreeMethodAll_Bot"
 
-# UPDATED CHANNELS DATA (Ab sirf 1 channel hai)
+# --- UPDATED CHANNELS DATA ---
 REQUIRED_CHANNELS = [
+    {"id": -1002454723830, "link": "https://t.me/SENPAI_GC", "name": "Senpai GC"},
+    {"id": -1003801897984, "link": "https://t.me/sanatanigojo", "name": "Sanatani Gojo"},
     {"id": -1002331607869, "link": "https://t.me/Yonko_Crew", "name": "Yonko Crew"}
 ]
 
@@ -44,7 +46,8 @@ async def is_user_joined(user_id):
         try:
             member = await bot.get_chat_member(chat_id=ch["id"], user_id=user_id)
             if member.status in ["left", "kicked"]: return False
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error checking channel {ch['id']}: {e}")
             return False
     return True
 
@@ -73,7 +76,7 @@ async def start_handler(message: types.Message):
         for ch in REQUIRED_CHANNELS:
             builder.row(types.InlineKeyboardButton(text=f"Join {ch['name']}", url=ch["link"]))
         builder.row(types.InlineKeyboardButton(text="✅ Check Join", callback_data="check"))
-        await message.answer("❌ Niche diya gaya channel join karein tabhi bot chalega:", reply_markup=builder.as_markup())
+        await message.answer("❌ Niche diye gaye saare channels join karein tabhi bot chalega:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data == "check")
 async def check_cb(callback: types.CallbackQuery):
@@ -84,9 +87,8 @@ async def check_cb(callback: types.CallbackQuery):
         builder.row(types.InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer"))
         await callback.message.answer("✅ Verification successful!", reply_markup=builder.as_markup())
     else: 
-        await callback.answer("❌ Aapne abhi tak channel join nahi kiya!", show_alert=True)
+        await callback.answer("❌ Aapne abhi tak saare channels join nahi kiye!", show_alert=True)
 
-# --- BROADCAST & ADMIN ---
 @dp.message(Command("broadcast"), F.from_user.id == ADMIN_ID)
 async def broadcast(message: types.Message):
     if not message.reply_to_message: return await message.answer("Message par reply karein.")
